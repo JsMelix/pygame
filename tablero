@@ -1,0 +1,478 @@
+import pygame
+import sys
+import random
+import time
+
+# --- Constants ---
+SCREEN_WIDTH = 800
+SCREEN_HEIGHT = 600
+GRID_SIZE = 40
+# Adjust grid dimensions based on screen size and grid size
+GRID_WIDTH = SCREEN_WIDTH // GRID_SIZE
+GRID_HEIGHT = SCREEN_HEIGHT // GRID_SIZE
+
+# Colors
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+GRAY = (128, 128, 128) # Indestructible walls
+BROWN = (165, 42, 42)   # Destructible walls
+BLUE = (0, 0, 255)     # Player
+RED = (255, 0, 0)      # Bomb / Game Over / Win Text
+ORANGE = (255, 165, 0) # Explosion
+GREEN = (0, 255, 0)    # Win Text
+
+# Player settings
+PLAYER_SPEED = GRID_SIZE // 8 # Movement speed
+
+# Bomb settings
+BOMB_TIMER = 3  # Seconds until explosion
+EXPLOSION_DURATION = 0.5 # Seconds the explosion lasts
+EXPLOSION_RANGE = 1 # Tiles the explosion reaches (excluding center)
+
+# --- Level Data ---
+# W = Wall (Indestructible)
+# B = Brick (Destructible)
+# P = Player Start
+# ' ' = Empty Space
+# Ensure level dimensions match GRID_WIDTH and GRID_HEIGHT implicitly
+# Level 1 (20x15 grid)
+level_1 = [
+    "WWWWWWWWWWWWWWWWWWWW",
+    "W P B B B B B B B WW",
+    "WBW BWBWBWBWBWBW B W",
+    "W B B B B B B B B BW",
+    "WBWBWBWBWBWBWBWBW BW",
+    "W B B B B B B B B BW",
+    "WBW BWBWBWBWBWBW B W",
+    "W B B B B B B B B BW",
+    "WBWBWBWBWBWBWBWBW BW",
+    "W B B B B B B B B BW",
+    "WBW BWBWBWBWBWBW B W",
+    "W B B B B B B B B BW",
+    "WBWBWBWBWBWBWBWBW BW",
+    "WW B B B B B B B B W",
+    "WWWWWWWWWWWWWWWWWWWW",
+]
+
+# Level 2 (20x15 grid)
+level_2 = [
+    "WWWWWWWWWWWWWWWWWWWW",
+    "WP    B B B    B  W",
+    "W W WW W W W WW W WW",
+    "W B BB B B B BB B BW",
+    "W W WW W W W WW W WW",
+    "W B BB B B B BB B BW",
+    "W W WW W W W WW W WW",
+    "W B BB B B B BB B BW",
+    "W W WW W W W WW W WW",
+    "W B BB B B B BB B BW",
+    "W W WW W W W WW W WW",
+    "W B BB B B B BB B BW",
+    "W W WW W W W WW W WW",
+    "W  B    B B B    B W",
+    "WWWWWWWWWWWWWWWWWWWW",
+]
+
+levels = [level_1, level_2]
+
+# --- Game Objects ---
+
+class Player(pygame.sprite.Sprite):
+    """Represents the player character."""
+    def __init__(self, x, y):
+        super().__init__()
+        self.image = pygame.Surface([GRID_SIZE - 4, GRID_SIZE - 4]) # Slightly smaller than grid
+        self.image.fill(BLUE)
+        self.rect = self.image.get_rect()
+        self.set_position(x, y) # Use a method to set position
+        self.bombs_placed = 0
+        self.max_bombs = 1 # Max bombs allowed at once
+
+    def set_position(self, grid_x, grid_y):
+        """Sets the player's position based on grid coordinates."""
+        self.grid_x = grid_x
+        self.grid_y = grid_y
+        self.rect.topleft = (grid_x * GRID_SIZE + 2, grid_y * GRID_SIZE + 2)
+
+    def move(self, dx, dy, walls):
+        """Moves the player and handles collisions with walls."""
+        # Store original position
+        original_x = self.rect.x
+        original_y = self.rect.y
+
+        # Move horizontally
+        self.rect.x += dx
+        # Check for horizontal collisions
+        for wall in walls:
+            if self.rect.colliderect(wall.rect):
+                # If moving right, snap to left edge of wall
+                if dx > 0:
+                    self.rect.right = wall.rect.left
+                # If moving left, snap to right edge of wall
+                elif dx < 0:
+                    self.rect.left = wall.rect.right
+                break # Stop checking after first collision
+
+        # Move vertically
+        self.rect.y += dy
+        # Check for vertical collisions
+        for wall in walls:
+            if self.rect.colliderect(wall.rect):
+                 # If moving down, snap to top edge of wall
+                if dy > 0:
+                    self.rect.bottom = wall.rect.top
+                # If moving up, snap to bottom edge of wall
+                elif dy < 0:
+                    self.rect.top = wall.rect.bottom
+                break # Stop checking after first collision
+
+
+        # Update grid position (approximate based on center) - might need refinement
+        self.grid_x = round(self.rect.centerx / GRID_SIZE)
+        self.grid_y = round(self.rect.centery / GRID_SIZE)
+
+
+    def place_bomb(self, bombs_group, all_sprites, walls):
+        """Places a bomb at the player's current grid location."""
+        if self.bombs_placed < self.max_bombs:
+            # Find the grid cell the player is mostly in
+            grid_x = int(self.rect.centerx // GRID_SIZE)
+            grid_y = int(self.rect.centery // GRID_SIZE)
+
+            # Check if a bomb already exists at this location
+            can_place = True
+            for bomb in bombs_group:
+                if bomb.grid_x == grid_x and bomb.grid_y == grid_y:
+                    can_place = False
+                    break
+            # Check if the location is blocked by a wall (shouldn't happen often with player collision)
+            for wall in walls:
+                 if wall.grid_x == grid_x and wall.grid_y == grid_y:
+                     can_place = False
+                     break
+
+            if can_place:
+                bomb = Bomb(grid_x, grid_y)
+                bombs_group.add(bomb)
+                all_sprites.add(bomb) # Add bomb to be drawn
+                self.bombs_placed += 1
+                # Allow player to walk over the bomb they just placed
+                bomb.allow_pass_timer = time.time() + 0.5 # Allow passing for 0.5 sec
+                return bomb
+        return None
+
+
+class Bomb(pygame.sprite.Sprite):
+    """Represents a bomb placed by the player."""
+    def __init__(self, grid_x, grid_y):
+        super().__init__()
+        self.image = pygame.Surface([GRID_SIZE, GRID_SIZE])
+        self.image.fill(RED)
+        # Draw a small black circle in the middle
+        pygame.draw.circle(self.image, BLACK, (GRID_SIZE // 2, GRID_SIZE // 2), GRID_SIZE // 4)
+        self.rect = self.image.get_rect()
+        self.rect.topleft = (grid_x * GRID_SIZE, grid_y * GRID_SIZE)
+        self.grid_x = grid_x
+        self.grid_y = grid_y
+        self.place_time = time.time()
+        self.exploded = False
+        self.allow_pass_timer = 0 # Timer to allow player to pass over it initially
+
+    def update(self, explosions_group, all_sprites, walls, bricks_group, player):
+        """Checks if the bomb should explode."""
+        if not self.exploded and time.time() > self.place_time + BOMB_TIMER:
+            self.explode(explosions_group, all_sprites, walls, bricks_group, player) # Pass bricks group
+            self.exploded = True
+            if player.bombs_placed > 0: # Safety check
+                 player.bombs_placed -= 1 # Allow player to place another bomb
+            self.kill() # Remove the bomb sprite
+
+    def explode(self, explosions_group, all_sprites, walls, bricks_group, player):
+        """Creates explosion sprites and handles destruction."""
+        # print(f"Bomb exploding at ({self.grid_x}, {self.grid_y})")
+        explosion_tiles = [(self.grid_x, self.grid_y)] # Start with center
+
+        # Directions: Right, Left, Down, Up
+        directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+
+        for dx, dy in directions:
+            for i in range(1, EXPLOSION_RANGE + 1):
+                nx, ny = self.grid_x + dx * i, self.grid_y + dy * i
+
+                # Check bounds
+                if 0 <= nx < GRID_WIDTH and 0 <= ny < GRID_HEIGHT:
+                    hit_indestructible = False
+                    hit_destructible = False
+
+                    # Check collision with indestructible walls (only Wall instances)
+                    for wall in walls:
+                        if isinstance(wall, Wall) and wall.grid_x == nx and wall.grid_y == ny:
+                             hit_indestructible = True
+                             break # Stop explosion in this direction
+
+                    if hit_indestructible:
+                        break # Stop explosion propagation in this direction
+
+                    # Check collision with destructible walls (Brick instances)
+                    # Use the specific bricks_group for checking and removal
+                    brick_hit = None
+                    for brick in bricks_group:
+                         if brick.grid_x == nx and brick.grid_y == ny:
+                             explosion_tiles.append((nx, ny))
+                             brick.kill() # Destroy the brick (removes from all groups)
+                             hit_destructible = True
+                             break # Stop explosion in this direction after hitting brick
+
+                    if hit_destructible:
+                        break # Stop explosion propagation in this direction
+
+                    # If no wall hit, add tile to explosion
+                    explosion_tiles.append((nx, ny))
+                else:
+                    break # Stop if out of bounds
+
+        # Create explosion sprites for each affected tile
+        for ex, ey in explosion_tiles:
+            explosion = Explosion(ex, ey)
+            explosions_group.add(explosion)
+            all_sprites.add(explosion)
+
+
+class Explosion(pygame.sprite.Sprite):
+    """Represents a part of the bomb explosion."""
+    def __init__(self, grid_x, grid_y):
+        super().__init__()
+        self.image = pygame.Surface([GRID_SIZE, GRID_SIZE])
+        self.image.fill(ORANGE)
+        # Optional: Make explosion slightly transparent
+        # self.image.set_alpha(180)
+        self.rect = self.image.get_rect()
+        self.rect.topleft = (grid_x * GRID_SIZE, grid_y * GRID_SIZE)
+        self.spawn_time = time.time()
+
+    def update(self):
+        """Removes the explosion sprite after a duration."""
+        if time.time() - self.spawn_time > EXPLOSION_DURATION:
+            self.kill()
+
+
+class Wall(pygame.sprite.Sprite):
+    """Represents an indestructible wall."""
+    def __init__(self, grid_x, grid_y):
+        super().__init__()
+        self.image = pygame.Surface([GRID_SIZE, GRID_SIZE])
+        self.image.fill(GRAY)
+        self.rect = self.image.get_rect()
+        self.rect.topleft = (grid_x * GRID_SIZE, grid_y * GRID_SIZE)
+        self.grid_x = grid_x
+        self.grid_y = grid_y
+
+class Brick(pygame.sprite.Sprite):
+    """Represents a destructible wall (brick)."""
+    def __init__(self, grid_x, grid_y):
+        super().__init__()
+        self.image = pygame.Surface([GRID_SIZE, GRID_SIZE])
+        self.image.fill(BROWN)
+        self.rect = self.image.get_rect()
+        self.rect.topleft = (grid_x * GRID_SIZE, grid_y * GRID_SIZE)
+        self.grid_x = grid_x
+        self.grid_y = grid_y
+
+# --- Game Functions ---
+
+def load_level(level_data, player_obj):
+    """Clears existing sprites and loads a new level from data."""
+    # Clear existing sprites (except player, handled separately)
+    all_sprites.empty()
+    walls.empty()
+    bricks.empty()
+    bombs.empty()
+    explosions.empty()
+
+    player_start_pos = None
+
+    # Add player back first so it's potentially drawn under other things if needed
+    all_sprites.add(player_obj)
+
+    # Iterate through the level data (list of strings)
+    for y, row in enumerate(level_data):
+        # Check if row length matches expected width
+        if len(row) != GRID_WIDTH:
+            print(f"Warning: Level row {y} has incorrect width ({len(row)} instead of {GRID_WIDTH}). Skipping row.")
+            continue
+        # Check if y is within expected height
+        if y >= GRID_HEIGHT:
+            print(f"Warning: Level has more rows ({len(level_data)}) than screen height allows ({GRID_HEIGHT}). Skipping extra rows.")
+            break
+
+        for x, tile in enumerate(row):
+            if tile == 'W':
+                wall = Wall(x, y)
+                all_sprites.add(wall)
+                walls.add(wall)
+            elif tile == 'B':
+                brick = Brick(x, y)
+                all_sprites.add(brick)
+                walls.add(brick) # Add to general walls for collision
+                bricks.add(brick) # Add to specific bricks group
+            elif tile == 'P':
+                if player_start_pos is None: # Only use the first 'P' found
+                    player_start_pos = (x, y)
+                else:
+                    print(f"Warning: Multiple player start positions ('P') found in level. Using first one at {player_start_pos}.")
+            elif tile == ' ':
+                pass # Empty space
+
+    # Set player position
+    if player_start_pos:
+        player_obj.set_position(player_start_pos[0], player_start_pos[1])
+    else:
+        print("Error: No player start position ('P') found in level data! Placing player at default (1, 1).")
+        player_obj.set_position(1, 1) # Default fallback
+
+    # Reset player bomb count for the new level
+    player_obj.bombs_placed = 0
+
+
+def display_message(screen, message, color=RED):
+    """Displays a centered message on the screen."""
+    font = pygame.font.Font(None, 74)
+    text = font.render(message, True, color)
+    text_rect = text.get_rect(center=(SCREEN_WIDTH/2, SCREEN_HEIGHT/2))
+    # Add a semi-transparent background for better readability
+    bg_surface = pygame.Surface((text_rect.width + 20, text_rect.height + 20), pygame.SRCALPHA)
+    bg_surface.fill((0, 0, 0, 150)) # Black with alpha
+    screen.blit(bg_surface, (text_rect.left - 10, text_rect.top - 10))
+    screen.blit(text, text_rect)
+
+
+# --- Game Setup ---
+pygame.init()
+screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+pygame.display.set_caption("PyBomber - Niveles Múltiples")
+clock = pygame.time.Clock()
+
+# Sprite Groups (initialize here, populated by load_level)
+all_sprites = pygame.sprite.Group()
+walls = pygame.sprite.Group()       # All wall types (for collision)
+bricks = pygame.sprite.Group()      # Only destructible walls (for level completion)
+bombs = pygame.sprite.Group()
+explosions = pygame.sprite.Group()
+
+# Create Player (initial position doesn't matter much, load_level sets it)
+player = Player(0, 0)
+
+# Game State Variables
+current_level_index = 0
+game_over = False
+game_won = False
+
+# Load the first level
+load_level(levels[current_level_index], player)
+
+# --- Game Loop ---
+running = True
+while running:
+    # --- Event Handling ---
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        if event.type == pygame.KEYDOWN:
+             # Allow placing bombs only if game is active
+            if not game_over and not game_won and event.key == pygame.K_SPACE:
+                placed_bomb = player.place_bomb(bombs, all_sprites, walls)
+                # Make the placed bomb a temporary obstacle for the player
+                # if placed_bomb:
+                #    walls.add(placed_bomb) # Temporarily add bomb to walls
+            # Allow restarting if game over or won
+            elif (game_over or game_won) and event.key == pygame.K_r:
+                 game_over = False
+                 game_won = False
+                 current_level_index = 0
+                 load_level(levels[current_level_index], player)
+                 player.image.fill(BLUE) # Reset player color if changed
+
+
+    # --- Game Logic (only run if game is active) ---
+    if not game_over and not game_won:
+        # --- Player Movement ---
+        keys = pygame.key.get_pressed()
+        move_x, move_y = 0, 0
+        if keys[pygame.K_LEFT]:
+            move_x = -PLAYER_SPEED
+        if keys[pygame.K_RIGHT]:
+            move_x = PLAYER_SPEED
+        if keys[pygame.K_UP]:
+            move_y = -PLAYER_SPEED
+        if keys[pygame.K_DOWN]:
+            move_y = PLAYER_SPEED
+
+        # Move player only if there's input
+        if move_x != 0 or move_y != 0:
+            # Filter out bombs the player is allowed to pass over from collision check
+            collision_walls = pygame.sprite.Group()
+            for wall in walls:
+                 is_passable_bomb = False
+                 if isinstance(wall, Bomb) and time.time() < wall.allow_pass_timer:
+                     is_passable_bomb = True
+                 if not is_passable_bomb:
+                     collision_walls.add(wall)
+
+            # Try moving horizontally first, then vertically to slide along walls
+            if move_x != 0:
+                 player.move(move_x, 0, collision_walls) # Pass filtered walls
+            if move_y != 0:
+                 player.move(0, move_y, collision_walls) # Pass filtered walls
+
+
+        # --- Update Sprites ---
+        # Pass the specific bricks group to the bomb update for destruction check
+        bombs.update(explosions, all_sprites, walls, bricks, player)
+        explosions.update()
+
+        # --- Check Game Conditions ---
+        # Check for player collision with explosions
+        if pygame.sprite.spritecollide(player, explosions, False):
+            print("¡Has perdido!")
+            game_over = True
+            player.image.fill(BLACK) # Indicate player death
+
+        # Check for level completion (no bricks left)
+        elif len(bricks) == 0:
+            print(f"Nivel {current_level_index + 1} completado!")
+            current_level_index += 1
+            # Check if there are more levels
+            if current_level_index < len(levels):
+                load_level(levels[current_level_index], player)
+            else:
+                # All levels completed
+                print("¡Has ganado!")
+                game_won = True
+
+
+    # --- Drawing ---
+    screen.fill(WHITE) # Background
+
+    all_sprites.draw(screen) # Draw all game elements
+
+    # Display Game Over or Win message
+    if game_over:
+        display_message(screen, "GAME OVER (R para reiniciar)", RED)
+    elif game_won:
+        display_message(screen, "¡GANASTE! (R para reiniciar)", GREEN)
+    else:
+         # Display current level number (optional)
+        font = pygame.font.Font(None, 36)
+        level_text = font.render(f"Nivel: {current_level_index + 1}", True, BLACK)
+        screen.blit(level_text, (10, SCREEN_HEIGHT - 40)) # Bottom-left corner
+
+
+    # --- Flip Display ---
+    pygame.display.flip()
+
+    # --- Frame Rate ---
+    clock.tick(60) # Limit FPS to 60
+
+# --- Quit Pygame ---
+pygame.quit()
+sys.exit()
